@@ -1,0 +1,6 @@
+streamlit==1.31.1
+googlemaps==4.10.0
+folium==0.15.1
+streamlit-folium==0.18.0
+polyline==2.0.0
+pandas
