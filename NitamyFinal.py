@@ -44,7 +44,6 @@ def limpiar_destinos(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["Destino", "¿Límite?", "Hora Límite"])
 
     df = df.copy()
-
     df["Destino"] = df["Destino"].fillna("").astype(str).str.strip()
 
     if "¿Límite?" not in df.columns:
@@ -71,17 +70,12 @@ def formatear_hora(dt_obj: datetime.datetime) -> str:
 
 
 def crear_url_google_maps(origen: str, destinos_ordenados: list[str]) -> str:
-    """
-    Crea URL para abrir la ruta circular en Google Maps.
-    Google Maps limita waypoints, pero para pocos destinos funciona bien.
-    """
     if not destinos_ordenados:
         return ""
 
     origin_enc = urllib.parse.quote(origen)
     destination_enc = urllib.parse.quote(origen)
 
-    # Google Maps Directions URL
     base_url = (
         f"https://www.google.com/maps/dir/?api=1"
         f"&origin={origin_enc}"
@@ -89,9 +83,8 @@ def crear_url_google_maps(origen: str, destinos_ordenados: list[str]) -> str:
         f"&travelmode=driving"
     )
 
-    if destinos_ordenados:
-        wp = "|".join(urllib.parse.quote(x) for x in destinos_ordenados)
-        base_url += f"&waypoints={wp}"
+    wp = "|".join(urllib.parse.quote(x) for x in destinos_ordenados)
+    base_url += f"&waypoints={wp}"
 
     return base_url
 
@@ -102,7 +95,7 @@ def calcular_ruta(origen: str, destinos_raw: pd.DataFrame, peso: float,
 
     respuesta = gmaps.directions(
         origin=origen,
-        destination=origen,  # fuerza ruta circular
+        destination=origen,
         waypoints=destinos_raw["Destino"].tolist(),
         optimize_waypoints=True,
         mode="driving",
@@ -128,17 +121,12 @@ def calcular_ruta(origen: str, destinos_raw: pd.DataFrame, peso: float,
     if vehiculo is None:
         raise ValueError(f"No existe una unidad con capacidad suficiente para {peso} kg.")
 
-    costo_estimado = distancia_total_km * vehiculo["costo_km"]
-
+    
     waypoint_order = ruta.get("waypoint_order", list(range(len(destinos_raw))))
     destinos_ordenados_df = destinos_raw.iloc[waypoint_order].reset_index(drop=True)
 
-    # Construcción del itinerario con hora estimada de llegada y estatus
     itinerario = []
     acumulado_seg = 0
-
-    # Los primeros N legs corresponden a origen -> paradas -> ... -> última parada
-    # El último leg es regreso a base
     num_stops = len(destinos_ordenados_df)
 
     for i in range(num_stops):
@@ -151,17 +139,24 @@ def calcular_ruta(origen: str, destinos_raw: pd.DataFrame, peso: float,
         hora_limite = destino_row.get("Hora Límite", None)
 
         estatus = "SIN LÍMITE"
+
         if usa_limite and pd.notna(hora_limite):
             try:
-                if isinstance(hora_limite, str):
-                    hora_limite = datetime.datetime.strptime(hora_limite.strip(), "%H:%M").time()
-
-                limite_dt = datetime.datetime.combine(fecha, hora_limite)
-
-                if llegada_dt <= limite_dt:
-                    estatus = "🟢 A TIEMPO"
+                if isinstance(hora_limite, datetime.time):
+                    hora_limite_time = hora_limite
+                elif isinstance(hora_limite, str):
+                    hora_limite_time = datetime.datetime.strptime(
+                        hora_limite.strip(), "%H:%M"
+                    ).time()
                 else:
-                    estatus = "🔴 TARDE"
+                    hora_limite_time = None
+
+                if hora_limite_time is not None:
+                    limite_dt = datetime.datetime.combine(fecha, hora_limite_time)
+                    estatus = "🟢 A TIEMPO" if llegada_dt <= limite_dt else "🔴 TARDE"
+                else:
+                    estatus = "LÍMITE INVÁLIDO"
+
             except Exception:
                 estatus = "LÍMITE INVÁLIDO"
 
@@ -177,13 +172,11 @@ def calcular_ruta(origen: str, destinos_raw: pd.DataFrame, peso: float,
 
     itinerario_df = pd.DataFrame(itinerario)
 
-    # Mapa
     puntos = []
     encoded = ruta.get("overview_polyline", {}).get("points")
     if encoded:
         puntos = polyline.decode(encoded)
 
-    # Ruta ordenada para botón Google Maps
     destinos_ordenados = destinos_ordenados_df["Destino"].tolist()
     maps_url = crear_url_google_maps(origen, destinos_ordenados)
 
@@ -191,7 +184,6 @@ def calcular_ruta(origen: str, destinos_raw: pd.DataFrame, peso: float,
         "distancia_total_km": distancia_total_km,
         "tiempo_total_hrs": tiempo_total_hrs,
         "vehiculo": vehiculo,
-        "costo_estimado": costo_estimado,
         "itinerario_df": itinerario_df,
         "puntos_mapa": puntos,
         "ruta_bruta": ruta,
@@ -216,12 +208,10 @@ def render_kpis_secundarios(resultado: dict):
         k1, k2, k3 = st.columns(3)
         k1.metric("Tiempo Estimado", f"{resultado['tiempo_total_hrs']:.2f} horas")
         k2.metric("Unidad Sugerida", resultado["vehiculo"]["nombre"])
-        k3.metric("Costo de Transporte", f"${resultado['costo_estimado']:.2f} MXN")
     except Exception:
         st.write(f"**Tiempo Estimado:** {resultado['tiempo_total_hrs']:.2f} horas")
         st.write(f"**Unidad Sugerida:** {resultado['vehiculo']['nombre']}")
-        st.write(f"**Costo de Transporte:** ${resultado['costo_estimado']:.2f} MXN")
-
+       
 
 def render_itinerario(resultado: dict):
     st.markdown("## 🏁 Itinerario Detallado")
@@ -262,7 +252,6 @@ def render_mapa(resultado: dict):
 
     m = folium.Map(location=puntos[0], zoom_start=11)
 
-    # Polilínea
     folium.PolyLine(
         puntos,
         color="blue",
@@ -271,7 +260,6 @@ def render_mapa(resultado: dict):
         tooltip="Ruta optimizada"
     ).add_to(m)
 
-    # Marker base
     folium.Marker(
         location=puntos[0],
         popup="Base (Inicio / Fin)",
@@ -279,7 +267,6 @@ def render_mapa(resultado: dict):
         icon=folium.Icon(color="green", icon="home", prefix="fa")
     ).add_to(m)
 
-    # Marcadores de destinos con geocodificación simple
     for i, destino in enumerate(resultado["destinos_ordenados"], start=1):
         try:
             geo = gmaps.geocode(destino)
@@ -317,13 +304,39 @@ with st.sidebar:
         st.write("---")
         st.subheader("📍 Destinos")
 
-        df_base = pd.DataFrame(columns=["Destino", "¿Límite?", "Hora Límite"])
+        df_base = pd.DataFrame({
+            "Destino": [""],
+            "¿Límite?": [False],
+            "Hora Límite": [None]
+        })
+
         df_editado = st.data_editor(
             df_base,
             num_rows="dynamic",
             hide_index=True,
             use_container_width=True,
-            key="editor_destinos"
+            key="editor_destinos",
+            column_config={
+                "Destino": st.column_config.TextColumn(
+                    "Destino",
+                    help="Ingresa la dirección o nombre del destino",
+                    width="large",
+                    required=True
+                ),
+                "¿Límite?": st.column_config.CheckboxColumn(
+                    "¿Límite?",
+                    help="Marca si este destino tiene hora límite",
+                    default=False,
+                    width="small"
+                ),
+                "Hora Límite": st.column_config.TimeColumn(
+                    "Hora Límite",
+                    help="Selecciona la hora límite para la entrega",
+                    format="HH:mm",
+                    step=60,
+                    width="medium"
+                ),
+            }
         )
 
         btn_calcular = st.form_submit_button("🚀 OPTIMIZAR RUTA")
@@ -358,17 +371,11 @@ if st.session_state["error_ruta"]:
 if st.session_state["resultado_ruta"] is not None:
     resultado = st.session_state["resultado_ruta"]
 
-    # KPI principal arriba
     render_kpi_principal(resultado)
-
     st.markdown("---")
-
-    # KPIs secundarios
     render_kpis_secundarios(resultado)
-
     st.markdown("---")
 
-    # Layout principal
     try:
         col_it, col_map = st.columns([1, 1.25])
 
